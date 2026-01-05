@@ -1,0 +1,271 @@
+import io
+import pandas as pd
+import dash
+from dash import dcc, html, Input, Output
+import dash_bootstrap_components as dbc
+import plotly.express as px
+from datetime import datetime
+import yfinance as yf
+import requests
+
+# Locating Tickers
+def sp100_tickers():
+    """Scrapes the live S&P 100 list from Wikipedia."""
+    try: 
+        url = 'https://en.wikipedia.org/wiki/S%26P_100'
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(url, headers=headers)
+
+        html_data = io.StringIO(response.text)
+        tables = pd.read_html(html_data)
+
+        return tables[2]['Symbol'].tolist()
+        
+    except Exception as e:
+        print(f"Error fetching S&P 100 tickers: {e}")
+        return ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA","TSLA", "JPM"]  # Fallback
+
+def load_data(tickers):
+    """Fetches accounting data from yfinance to run DuPont analysis."""
+    all_data = []
+
+    if isinstance(tickers, str):
+        tickers = [tickers]
+
+    for symbol in tickers:
+        try:
+            yf_symbol = symbol.replace('.','-')
+            ticker = yf.Ticker(yf_symbol)
+
+            income = ticker.financials
+            balance = ticker.balance_sheet
+            
+            if income.empty or balance.empty:
+                print(f"No data for {symbol}")
+                continue
+            
+            for date in income.columns:
+                try:
+                    rev = income.loc['Total Revenue', date] if 'Total Revenue' in income.index else 0
+                    net = income.loc['Net Income', date] if 'Net Income' in income.index else 0
+                    assets = balance.loc['Total Assets', date] if 'Total Assets' in balance.index else 0
+                    equity = 0
+                    if "Stockholders Equity" in balance.index:
+                        equity = balance.loc["Stockholders Equity", date]
+                    elif "Total Stockholder Equity" in balance.index:
+                        equity = balance.loc["Total Stockholder Equity", date]
+
+                    all_data.append({
+                        'Ticker': symbol,
+                        'Year': date.year,
+                        'Revenue': rev,
+                        'Net_Income': net,
+                        'Total_Assets': assets,
+                        'Equity': equity
+                    })
+                except KeyError:
+                    continue
+        except Exception as e:
+            continue
+    
+    if not all_data:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_data)
+
+    # Clean Numerics
+    cols = ['Net_Income', 'Revenue', 'Total_Assets', 'Equity']
+    for col in cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+    # DuPont Calculations
+    df['Profit_Margin'] = df.apply(lambda r: r['Net_Income'] / r['Revenue'] if r['Revenue'] != 0 else 0, axis=1)
+    df['Asset_Turnover'] = df.apply(lambda r: r['Revenue'] / r['Total_Assets'] if r['Total_Assets'] != 0 else 0, axis=1)
+    df['Equity_Multiplier'] = df.apply(lambda r: r['Total_Assets'] / r['Equity'] if r['Equity'] != 0 else 0, axis=1)
+    df['ROE'] = df['Profit_Margin'] * df['Asset_Turnover'] * df['Equity_Multiplier']
+
+    return df
+
+sp100_list = sp100_tickers()
+df = load_data(sp100_list[:3])
+
+if df.empty: 
+    df = pd.DataFrame(columns=['Ticker','Year','Revenue','Net_Income','Total_Assets','Equity','Profit_Margin','Asset_Turnover','Equity_Multiplier','ROE'])
+
+
+# Layout
+COLORS = {'primary': '#1A237E', 'secondary': '#FF7043', "tertiary": "#26A69A", 'bg': '#F8F9FA'}
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME])
+app.title = "Corporate KPI Statistics"
+
+# Sidebar
+
+sidebar = html.Div(
+    [
+        html.Div([html.I(className="fa fa-th-large")], className="mb-4 text-center"),
+        html.Div([html.I(className='fa fa-chart-line')], className='mb-4 text-center'),
+        html.Div([html.I(className='fa fa-user-friends')], className='mb-4 text-center'),
+        html.Div([html.I(className='fa fa-wallet')], className='mb-4 text-center'),
+    ],
+    style={'width': '60px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'height': '100vh', 'position': 'fixed', 'paddingTop': '20px'}
+)
+
+# Content Wrapper
+content = html.Div(
+    style={'marginLeft': '60px', 'padding': '20px', 'backgroundColor': COLORS['bg']},
+    children = [
+        # Header 
+        dbc.Row([
+            dbc.Col([
+                html.H2("Corporate KPI Dashboard: DuPont Strategy", className='fw-bold'), 
+                html.P('Analyzing Strategic Drivers of ROE across 11 sectors (2021-2025)', className='text-muted small')
+            ], width=9),
+            dbc.Col(html.P(f"{datetime.now().strftime('%d %B, %Y')}", className='text-end text-muted'), width=3)
+        ], className='mb-4'),
+
+        # Control Row
+        dbc.Row([
+            dbc.Col([
+                dbc.Card(style={'padding': '15px', 'border': 'none', 'boxShadow': '0 4px 6px rgba(0,0,0,0.1)'}, children=[
+                    html.Label('Compare Corporate Tickers:', className='fw-bold small mb-2'),
+                    dcc.Dropdown(
+                        id='ticker-dropdown',
+                        options=[{'label': t, 'value': t} for t in sorted(sp100_list)],
+                        value=sp100_list[:2],
+                        multi=True
+                    )
+                ])
+            ], width=8),
+                
+                # Executive Insights
+                dbc.Col([
+                        dbc.Card(style={
+                        'padding': '20px',
+                        'border': 'none',
+                        'borderRadius': '12px',
+                        'boxShadow': '0 6px 12px rgba(0,0,0,0.15)',
+                        'borderLeft': f'6px solid {COLORS["primary"]}'
+                    }, children=[
+                        # Lighblub
+                        html.Div([
+                            html.I(className='fa fa-lightbulb fa-2x text-warning'),
+                            html.H5(" Strategic Intelligence", className='d-inline text-primary fw-bold')
+                        ], className='mb-3'),
+
+                        # Larger Text (Analysis Text)
+                        html.P(id='dynamic-summary', className='mb-3', style={
+                            'fontSize': '15px', 
+                            'lineHeight': '1.5',
+                            'color': '#424242'
+                        }),
+
+                        # Separator
+                        html.Hr(style={'borderColor': '#ddd'}),
+
+                        # Risk Alert
+                        html.Div([
+                            html.I(className='fas fa-exclamation-triangle me-2'), 
+                            html.Span(id='outlier-alert')
+                        ], className = 'text-danger fw-bold', style={'fontSize': '14px'})
+                    ])
+                ], width = 4)
+            ], className='mb-4'),
+
+            # Main Chart
+            dbc.Row([
+                dbc.Col(dbc.Card(dcc.Graph(id='roe-trend-chart'), style={'border': 'none'}), width=12)
+            ], className='mb-4'),
+
+            # DuPont Components
+            dbc.Row([
+                dbc.Col(dbc.Card(dcc.Graph(id='margin-chart'), style={'border': 'none',}), width=4), 
+                dbc.Col(dbc.Card(dcc.Graph(id='turnover-chart'), style={'border': 'none',}), width=4),
+                dbc.Col(dbc.Card(dcc.Graph(id='leverage-chart'), style={'border': 'none',}), width=4)
+            ], className='mb-4'),
+
+            # Heatmap
+            dbc.Row([
+                dbc.Col(dbc.Card(dcc.Graph(id='performance-heatmap'), style={'border': 'none'}), width=12)
+            ], className='mb-4'),
+        ]
+)
+
+# UI Components
+app.layout = html.Div([sidebar, content])
+
+# Callbacks
+@app.callback(
+    [Output('roe-trend-chart', 'figure'),
+     Output('margin-chart', 'figure'),
+     Output('turnover-chart', 'figure'),
+     Output('leverage-chart', 'figure'),
+     Output('performance-heatmap', 'figure'),
+     Output('dynamic-summary', 'children'),
+     Output('outlier-alert', 'children')],
+    [Input('ticker-dropdown', 'value')]
+)
+def update_dashboard(selected_tickers):
+    if not selected_tickers:
+        return [px.line(title='Select Tickers')] * 5 + ["Select ticker to analyze.",""]
+    current_df = load_data(selected_tickers)
+
+    if current_df.empty:
+        return [px.line(title='No Data Available')] * 5 + ["Could not fetch data.",""]
+
+    filtered = current_df
+
+# Visual Styling
+
+    template = 'plotly_white'
+    color_seq = [COLORS['primary'], COLORS['secondary'], COLORS['tertiary']]
+
+
+    # Visualizations
+    fig_roe = px.line(filtered, x='Year', y = 'ROE', color='Ticker', title="ROE Strategic Trends", 
+                      template=template, color_discrete_sequence=color_seq)
+    fig_roe.update_layout(height=350, margin=dict(l=20, r=20, t=40, b=20))
+
+    fig_margin = px.area(filtered, x = 'Year', y = 'Profit_Margin', color='Ticker', title="Profit Margin Over Time",
+                         template=template, color_discrete_sequence=color_seq)
+    fig_margin.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))   
+
+    fig_turnover = px.line(filtered, x = 'Year', y = 'Asset_Turnover', color='Ticker', title="Asset Turnover Over Time",
+                           template=template, color_discrete_sequence=color_seq)
+    fig_turnover.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+
+    fig_leverage = px.bar(filtered, x = 'Year', y = 'Equity_Multiplier', color='Ticker', title="Equity Multiplier Over Time",
+                          template=template, color_discrete_sequence=color_seq)
+    fig_leverage.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+
+    fig_heat = px.density_heatmap(filtered, x = 'Year', y = 'Ticker', z = "ROE", histfunc = 'avg', title = 'Long-term Corporate Performance Heatmap',
+                                  template=template, color_continuous_scale='Viridis')
+    fig_heat.update_layout(height=300)
+
+    # Nontechnical Summary 
+    # 1
+    if not filtered.empty: 
+        latest_year = filtered['Year'].max()
+        current_data = filtered[filtered['Year'] == latest_year]
+        leader = current_data.sort_values('ROE', ascending = False).iloc[0]
+        # 2 
+        if leader['Profit_Margin'] > filtered["Profit_Margin"].mean():
+            driver_msg = 'driven by superior Operation Efficieny (High Margins).'
+        else: 
+            driver_msg = 'driven primarily by Financial Leverage (Debt Strategy).'
+
+        # 3
+        risk_notes = []
+        high_leverage = current_data[current_data['Equity_Multiplier'] > 3.0]
+        if not high_leverage.empty:
+            risk_notes.append(f"Risk Warning: {', '.join(high_leverage['Ticker'].tolist())} indicate debt-fueled ROE growth.")
+        
+        risk_msg = ' | '.join(risk_notes) if risk_notes else "Stability: No major risk outliers detected."
+        summary = f"{leader['Ticker']} leads with ROE of {leader['ROE']:.2%}, {driver_msg} {risk_msg}"
+    else: 
+        summary = "Selected tickers to view insights."
+        risk_msg = ''
+
+    return fig_roe, fig_margin, fig_turnover, fig_leverage, fig_heat, summary, risk_msg
+
+if __name__ == '__main__':
+    app.run(debug=True)
