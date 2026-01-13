@@ -2,7 +2,7 @@
 
 **A financial intelligence tool that bridges the gap between raw accounting data and strategic decision-making.**
 
-This project is an interactive analytics dashboard designed to look under the hood of S&P 100 companies. Instead of just tracking stock prices, it automates the **DuPont Analysis framework** to deconstruct Return on Equity (ROE). This allows analysts and investors to instantly see *why* a company is performing well—whether it's due to superior operations, efficient asset use, or simply taking on more debt.
+This project is an interactive analytics dashboard designed to look under the hood of S&P 100 companies. Instead of just tracking stock prices, it automates the **DuPont Analysis framework** to deconstruct Return on Equity (ROE). This allows analysts and investors to instantly see *why* a company is performing well due to superior operations, efficient asset use, or simply taking on more debt.
 
 ## Why This Matters
 
